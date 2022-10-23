@@ -1,0 +1,23 @@
+{
+  "Labelled inspect": {
+    "prefix": "lin",
+    "body": [
+      "IO.inspect($1, label: \"$1 ($TM_FILENAME:$TM_LINE_NUMBER)\")"
+    ],
+    "description": "Add a labelled IO.inspect() call, with the variable name and file/line number"
+  },
+  "Piped labelled inspect": {
+    "prefix": "pin",
+    "body": [
+      "|> IO.inspect(label: \"$1 ($TM_FILENAME:$TM_LINE_NUMBER)\")"
+    ],
+    "description": "Pipe into a labelled IO.inspect() call, with the variable name and file/line number"
+  },
+  "Map key": {
+    "prefix": "k",
+    "body": [
+      "$1: $1"
+    ],
+    "description": "Add key and value of same name"
+  }
+}

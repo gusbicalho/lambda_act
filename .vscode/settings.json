@@ -8,6 +8,8 @@
     "editor.formatOnSave": true,
     "cSpell.words": [
         "brujn",
+        "defcombinator",
+        "defparsec",
         "escript",
         "typedstruct"
     ]

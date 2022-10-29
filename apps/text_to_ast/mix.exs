@@ -1,9 +1,9 @@
-defmodule Parsers.MixProject do
+defmodule TextToAST.MixProject do
   use Mix.Project
 
   def project do
     [
-      app: :parsers,
+      app: :text_to_ast,
       version: "0.1.0",
       build_path: "../../_build",
       config_path: "../../config/config.exs",
@@ -25,8 +25,8 @@ defmodule Parsers.MixProject do
   # Run "mix help deps" to learn about dependencies.
   defp deps do
     [
-      {:typed_struct,
-       git: "https://github.com/gusbicalho/typed_struct.git", ref: "a1e60cd9e66c07b168b8d457d65ae211cef4f0e5"},
+      {:ast, in_umbrella: true},
+      {:nimble_parsec, "~> 1.2.3"},
     ]
   end
 end

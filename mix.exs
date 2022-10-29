@@ -1,4 +1,4 @@
-defmodule LambdaCh.MixProject do
+defmodule LambdaAct.MixProject do
   use Mix.Project
 
   def project do
@@ -21,6 +21,7 @@ defmodule LambdaCh.MixProject do
       {:freedom_formatter, ">= 2.0.0", runtime: false},
       {:typed_struct,
        git: "https://github.com/gusbicalho/typed_struct.git", ref: "a1e60cd9e66c07b168b8d457d65ae211cef4f0e5"},
+      {:nimble_parsec, "~> 1.2.3"},
     ]
   end
 end

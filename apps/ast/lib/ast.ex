@@ -2,18 +2,21 @@ defmodule AST do
   use TypedStruct
 
   defmodule Types do
-    @type type() :: Unit.t() | ActorRef.t() | Arrow.t()
     typedstruct module: Unit do
     end
 
     typedstruct module: ActorRef, enforce: true do
-      field :mailbox, AST.Types.type()
+      field :mailbox, AST.Types.t()
     end
 
     typedstruct module: Arrow, enforce: true do
-      field :argument, AST.Types.type()
-      field :evaluator_mailbox, AST.Types.type()
-      field :return, AST.Types.type()
+      field :argument, AST.Types.t()
+      field :evaluator_mailbox, AST.Types.t()
+      field :return, AST.Types.t()
+    end
+
+    typedstruct enforce: true do
+      field :type, Unit.t() | ActorRef.t() | Arrow.t()
     end
   end
 

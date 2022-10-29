@@ -100,28 +100,25 @@ defmodule TextToAST.Value.Choices do
   alias TextToAST.Helpers
   alias TextToAST.Identifier
 
-  def variable(combinator \\ empty()) do
-    combinator |> Identifier.identifier() |> map({Helpers, :to_variable, []})
+  def variable() do
+    Identifier.identifier() |> map({Helpers, :to_variable, []})
   end
 
-  def lambda(combinator \\ empty(), computation_parsec) do
-    combinator
-    |> wrap(
+  def lambda(computation_parsec) do
+    wrap(
       ignore(string("\\"))
       |> concat(Identifier.identifier())
       |> Helpers.whitespace()
       |> ignore(string("->"))
       |> Helpers.whitespace()
-      |> computation_parsec.()
+      |> concat(computation_parsec)
     )
     |> map({List, :to_tuple, []})
     |> map({Helpers, :to_lambda, []})
   end
 
-  def unit(combinator \\ empty()) do
-    combinator
-    |> string("()")
-    |> map({Helpers, :to_unit, []})
+  def unit() do
+    string("()") |> map({Helpers, :to_unit, []})
   end
 end
 
@@ -131,9 +128,8 @@ defmodule TextToAST.Value do
   alias TextToAST.Helpers
   alias TextToAST.Value.Choices
 
-  def value(combinator \\ empty(), computation_parsec) do
-    combinator
-    |> choice([
+  def value(computation_parsec) do
+    choice([
       Choices.unit(),
       Choices.lambda(computation_parsec),
       Choices.variable(),
@@ -149,84 +145,77 @@ defmodule TextToAST.Computation.Choices do
   alias TextToAST.Identifier
   alias TextToAST.Value
 
-  def apply(combinator \\ empty(), computation_parsec) do
-    combinator
-    |> wrap(
+  def apply(computation_parsec) do
+    wrap(
       Value.value(computation_parsec)
       |> Helpers.whitespace1()
-      |> Value.value(computation_parsec)
+      |> concat(Value.value(computation_parsec))
     )
     |> map({List, :to_tuple, []})
     |> map({Helpers, :to_apply, []})
     |> label("<value> <value> (apply)")
   end
 
-  def let_in(combinator \\ empty(), computation_parser) do
-    combinator
-    |> ignore(Helpers.word("let"))
+  def let_in(computation_parser) do
+    ignore(Helpers.word("let"))
     |> Helpers.whitespace()
     |> wrap(
       Identifier.identifier()
       |> Helpers.whitespace()
       |> ignore(string("<-"))
       |> Helpers.whitespace()
-      |> computation_parser.()
+      |> concat(computation_parser)
       |> Helpers.whitespace()
       |> ignore(Helpers.word("in"))
       |> Helpers.whitespace()
-      |> computation_parser.()
+      |> concat(computation_parser)
     )
     |> map({List, :to_tuple, []})
     |> map({Helpers, :to_let_in, []})
     |> label("let <identifier> <- <computation> in <computation>")
   end
 
-  def return(combinator \\ empty(), computation_parsec) do
-    combinator
-    |> ignore(Helpers.word("return"))
+  def return(computation_parsec) do
+    ignore(Helpers.word("return"))
     |> Helpers.whitespace()
-    |> Value.value(computation_parsec)
+    |> concat(Value.value(computation_parsec))
     |> map({Helpers, :to_return, []})
     |> label("return <value>")
   end
 
-  def spawn(combinator \\ empty(), computation_parsec) do
-    combinator
-    |> ignore(Helpers.word("spawn"))
+  def spawn(computation_parsec) do
+    ignore(Helpers.word("spawn"))
     |> Helpers.whitespace()
     |> ignore(string("{"))
     |> Helpers.whitespace()
-    |> computation_parsec.()
+    |> concat(computation_parsec)
     |> Helpers.whitespace()
     |> ignore(string("}"))
     |> map({Helpers, :to_spawn, []})
     |> label("spawn <Computation>")
   end
 
-  def send(combinator \\ empty(), computation_parsec) do
-    combinator
-    |> ignore(Helpers.word("send"))
+  def send(computation_parsec) do
+    ignore(Helpers.word("send"))
     |> Helpers.whitespace()
     |> wrap(
       Value.value(computation_parsec)
-      # |> Helpers.whitespace()
-      # |> Value.value(computation_parsec)
+      |> Helpers.whitespace()
+      |> concat(Value.value(computation_parsec))
     )
     |> map({List, :to_tuple, []})
     |> map({Helpers, :to_send, []})
     |> label("send <value> <value>")
   end
 
-  def receive(combinator \\ empty()) do
-    combinator
-    |> Helpers.word("receive")
+  def receive() do
+    Helpers.word("receive")
     |> map({Helpers, :to_receive, []})
     |> label("receive")
   end
 
-  def self(combinator \\ empty()) do
-    combinator
-    |> Helpers.word("self")
+  def self() do
+    Helpers.word("self")
     |> map({Helpers, :to_self, []})
     |> label("self")
   end
@@ -238,34 +227,31 @@ defmodule TextToAST.Computation do
   alias TextToAST.Helpers
   alias TextToAST.Computation.Choices
 
-  computation_parsec = &parsec(&1, :computation)
+  @computation_parsec parsec(:computation)
+
+  @computation choice([
+                 Choices.apply(@computation_parsec),
+                 Choices.return(@computation_parsec),
+                 Choices.spawn(@computation_parsec),
+                 Choices.send(@computation_parsec),
+                 Choices.receive(),
+                 Choices.self(),
+                 Choices.let_in(@computation_parsec),
+               ])
+               |> map({Helpers, :to_computation, []})
 
   defparsec :computation,
-            choice([
-              Choices.apply(computation_parsec),
-              Choices.let_in(computation_parsec),
-              Choices.return(computation_parsec),
-              Choices.spawn(computation_parsec),
-              Choices.send(computation_parsec),
-              Choices.receive(),
-              Choices.self(),
-            ])
-            |> map({Helpers, :to_computation, []}),
-            export_combinator: true
+            @computation,
+            export_combinator: true,
+            inline: true
 end
 
 defmodule TextToAST do
   import NimbleParsec
 
-  defparsec :lambda,
-            TextToAST.Value.Choices.lambda(&parsec(&1, {TextToAST.Computation, :computation}))
-
-  defparsec :value,
-            TextToAST.Value.value(&parsec(&1, {TextToAST.Computation, :computation}))
-
-  # inline: true
-
-  def hello do
-    :world
-  end
+  defparsec :computation,
+            parsec({TextToAST.Computation, :computation})
+            |> TextToAST.Helpers.whitespace()
+            |> eos(),
+            inline: true
 end

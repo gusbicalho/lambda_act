@@ -11,18 +11,19 @@ defmodule MacroToAST do
     end
   end
 
-  def let(_binding) do
+  defmacro let(_binding) do
     raise "`let` outside of computation macro"
   end
 
-  def return(_binding) do
+  defmacro return(_binding) do
     raise "`return` outside of computation macro"
   end
 
   # Impl
 
-  def compile_computation_block({:__block__, _, steps}) do
+  def compile_computation_block({:__block__, meta, steps}) do
     compile_steps(steps)
+    |> on_error_add_line_from(meta)
   end
 
   def compile_computation_block({_, _, _} = step), do: compile_computation(step)
@@ -49,7 +50,36 @@ defmodule MacroToAST do
     end
   end
 
-  def compile_computation({:let, meta, bindings_and_do}) do
+  def compile_computation({tag, meta, _} = form) do
+    case tag do
+      :let -> compile_let(form)
+      :self -> compile_self(form)
+      :spawn -> compile_spawn(form)
+      :send -> compile_send(form)
+      :return -> compile_return(form)
+      :receive -> compile_receive(form)
+      {:., _, _} -> compile_apply(form)
+      name when is_atom(name) and name not in [:fn] -> compile_apply(form)
+      _other -> test_compiling_unexpected_bare_value(form)
+    end
+    |> on_error_add_line_from(meta)
+  end
+
+  def compile_computation(malformed) do
+    compile_error([], "Malformed computation #{inspect(malformed)}")
+  end
+
+  def test_compiling_unexpected_bare_value({_, meta, _} = form) do
+    case compile_value(form) do
+      {:ok, _value} ->
+        compile_error(meta, "Bare value is not valid syntax. Did you mean `return <value>`?")
+
+      _error ->
+        compile_error(meta, "Malformed computation")
+    end
+  end
+
+  def compile_let({:let, _, bindings_and_do}) do
     {bindings, do_block} =
       Enum.split_while(bindings_and_do, fn
         {:<-, _, _} -> true
@@ -58,7 +88,7 @@ defmodule MacroToAST do
       end)
 
     with {:ok, bindings} <- map_while_ok(bindings, &compile_binding/1),
-         {:ok, final_comp} <- compile_do_block(meta, do_block) do
+         {:ok, final_comp} <- compile_do_block(do_block) do
       bindings
       |> Enum.reverse()
       |> Enum.reduce(final_comp, fn {binding, bound}, acc ->
@@ -72,183 +102,6 @@ defmodule MacroToAST do
       end)
       |> tag(:ok)
     end
-  end
-
-  def compile_computation({:self, meta, child}) do
-    case child do
-      nil ->
-        {:ok, %Computation{computation: %Computation.Self{}}}
-
-      _ ->
-        compile_error(meta, """
-        `self` does not expect arguments.
-        """)
-    end
-  end
-
-  def compile_computation({:spawn, meta, []}) do
-    compile_error(
-      meta,
-      """
-      spawn requires a computation body
-      """
-    )
-  end
-
-  def compile_computation({:spawn, _, [[{:do, block}]]}) do
-    with {:ok, block} <- compile_computation_block(block) do
-      {:ok, %Computation{computation: %Computation.Spawn{body: block}}}
-    end
-  end
-
-  def compile_computation({:spawn, _, args}) do
-    with {:ok, block} <- compile_steps(args) do
-      {:ok, %Computation{computation: %Computation.Spawn{body: block}}}
-    end
-  end
-
-  def compile_computation({:send, _, [msg, actor]}) do
-    with {:ok, msg} <- compile_value(msg),
-         {:ok, actor} <- compile_value(actor) do
-      {:ok,
-       %Computation{
-         computation: %Computation.Send{
-           message: msg,
-           actor: actor,
-         },
-       }}
-    end
-  end
-
-  def compile_computation({:send, meta, args}) do
-    compile_error(
-      meta,
-      "`send` expects two arguments, but at got #{inspect(args)}"
-    )
-  end
-
-  def compile_computation({:return, _, [value]}) do
-    with {:ok, value} <- compile_value(value) do
-      {:ok,
-       %Computation{
-         computation: %Computation.Return{value: value},
-       }}
-    end
-  end
-
-  def compile_computation({:receive, _, nil}) do
-    {:ok, %Computation{computation: %Computation.Receive{}}}
-  end
-
-  def compile_computation({:receive, meta, args}) do
-    compile_error(
-      meta,
-      "`receive` expects no arguments, but at got #{inspect(args)}"
-    )
-  end
-
-  def compile_computation({{:., _, [_callee]}, meta, []}) do
-    compile_error(
-      meta,
-      """
-      Function call requires exactly one argument.
-      Did you mean to use `return <value>` or `<value> []`?
-      """
-    )
-  end
-
-  def compile_computation({{:., _, [function]}, _, [arg]}) do
-    with {:ok, function} <- compile_value(function),
-         {:ok, arg} <- compile_value(arg) do
-      {:ok,
-       %Computation{
-         computation: %Computation.Apply{
-           function: function,
-           argument: arg,
-         },
-       }}
-    end
-  end
-
-  def compile_computation({{:., _, [_callee]}, meta, _args}) do
-    compile_error(
-      meta,
-      """
-      Value called with multiple arguments.
-      Function calls can only take one argument at a time.
-      The pattern below may do the trick:
-      let f <- <function>(<first_arg>) in
-      let f <- f(<second_arg>) in
-      ... f(<last_arg>)
-      """
-    )
-  end
-
-  def compile_computation({name, meta, nil}) when is_atom(name) and name not in [:fn] do
-    compile_error(
-      meta,
-      """
-      Bare name #{name} is not valid syntax.
-      Did you mean `return #{name}`?
-      """
-    )
-  end
-
-  def compile_computation({name, meta, []}) when is_atom(name) and name not in [:fn] do
-    compile_error(
-      meta,
-      """
-      Function call #{name}() at #{inspect(meta)} requires exactly one argument.
-      Did you mean `return #{name}` or `f []`?
-      """
-    )
-  end
-
-  def compile_computation({name, _, [arg]}) when is_atom(name) and name not in [:fn] do
-    function = %Value{value: %Value.Variable{identifier: %Identifier{id: name}}}
-
-    with {:ok, arg} = compile_value(arg) do
-      {:ok,
-       %Computation{
-         computation: %Computation.Apply{
-           function: function,
-           argument: arg,
-         },
-       }}
-    end
-  end
-
-  def compile_computation({name, meta, _args}) when is_atom(name) and name not in [:fn] do
-    compile_error(
-      meta,
-      """
-      #{name} called with multiple arguments.
-      Function calls can only take one argument at a time.
-      The pattern below may do the trick:
-      let #{name} <- #{name}(<first_arg>) in
-      let #{name} <- #{name}(<second_arg>) in
-      ... #{name}(<last_arg>)
-      """
-    )
-  end
-
-  def compile_computation({_, meta, _} = malformed) do
-    case compile_value(malformed) do
-      {:ok, _value} ->
-        compile_error(
-          meta,
-          """
-          Bare value is not valid syntax. Did you mean `return <value>`?
-          """
-        )
-
-      _error ->
-        compile_error(meta, "Malformed computation")
-    end
-  end
-
-  def compile_computation(malformed) do
-    compile_error([], "Malformed computation #{inspect(malformed)}")
   end
 
   def compile_binding({:<-, _, [{name, _, nil}, bound]}) do
@@ -267,17 +120,179 @@ defmodule MacroToAST do
     compile_error([], "Malformed binding: #{inspect(malformed)}")
   end
 
-  defp binding_name_to_identifier(:_), do: nil
-  defp binding_name_to_identifier(name) when is_atom(name), do: %Identifier{id: name}
-
-  def compile_do_block(_meta, [[do: block]]) do
+  def compile_do_block([[do: block]]) do
     compile_computation_block(block)
   end
 
-  def compile_do_block(meta, malformed) do
+  def compile_do_block(malformed) do
+    compile_error([], "Expected do block, instead got #{inspect(malformed)}")
+  end
+
+  def compile_self({:self, _, nil}) do
+    {:ok, %Computation{computation: %Computation.Self{}}}
+  end
+
+  def compile_self({:self, meta, _child}) do
+    compile_error(meta, """
+    `self` does not expect arguments.
+    """)
+  end
+
+  def compile_spawn({:spawn, meta, []}) do
     compile_error(
       meta,
-      "Expected do block, instead got #{inspect(malformed)}"
+      """
+      spawn requires a computation body
+      """
+    )
+  end
+
+  def compile_spawn({:spawn, _, [[{:do, block}]]}) do
+    with {:ok, block} <- compile_computation_block(block) do
+      {:ok, %Computation{computation: %Computation.Spawn{body: block}}}
+    end
+  end
+
+  def compile_spawn({:spawn, _, args}) do
+    with {:ok, block} <- compile_steps(args) do
+      {:ok, %Computation{computation: %Computation.Spawn{body: block}}}
+    end
+  end
+
+  def compile_send({:send, _, [msg, actor]}) do
+    with {:ok, msg} <- compile_value(msg),
+         {:ok, actor} <- compile_value(actor) do
+      {:ok,
+       %Computation{
+         computation: %Computation.Send{
+           message: msg,
+           actor: actor,
+         },
+       }}
+    end
+  end
+
+  def compile_send({:send, meta, args}) do
+    compile_error(
+      meta,
+      "`send` expects two arguments, but at got #{inspect(args)}"
+    )
+  end
+
+  def compile_return({:return, _, [value]}) do
+    with {:ok, value} <- compile_value(value) do
+      {:ok,
+       %Computation{
+         computation: %Computation.Return{value: value},
+       }}
+    end
+  end
+
+  def compile_return({:return, meta, []}) do
+    compile_error(meta, """
+      `return` expects a value.
+    """)
+  end
+
+  def compile_return({:return, meta, _args}) do
+    compile_error(meta, """
+      `return` expects exactly one value.
+    """)
+  end
+
+  def compile_receive({:receive, _, nil}) do
+    {:ok, %Computation{computation: %Computation.Receive{}}}
+  end
+
+  def compile_receive({:receive, meta, args}) do
+    compile_error(
+      meta,
+      "`receive` expects no arguments, but at got #{inspect(args)}"
+    )
+  end
+
+  def compile_apply({{:., _, [_callee]}, meta, []}) do
+    compile_error(
+      meta,
+      """
+      Function call requires exactly one argument.
+      Did you mean to use `return <value>` or `<value> []`?
+      """
+    )
+  end
+
+  def compile_apply({{:., _, [function]}, _, [arg]}) do
+    with {:ok, function} <- compile_value(function),
+         {:ok, arg} <- compile_value(arg) do
+      {:ok,
+       %Computation{
+         computation: %Computation.Apply{
+           function: function,
+           argument: arg,
+         },
+       }}
+    end
+  end
+
+  def compile_apply({{:., _, [_callee]}, meta, _args}) do
+    compile_error(
+      meta,
+      """
+      Value called with multiple arguments.
+      Function calls can only take one argument at a time.
+      The pattern below may do the trick:
+      let f <- <function>(<first_arg>) in
+      let f <- f(<second_arg>) in
+      ... f(<last_arg>)
+      """
+    )
+  end
+
+  def compile_apply({name, meta, nil}) when is_atom(name) do
+    compile_error(
+      meta,
+      """
+      Bare name #{name} is not valid syntax.
+      Did you mean `return #{name}`?
+      """
+    )
+  end
+
+  def compile_apply({name, meta, []}) when is_atom(name) do
+    compile_error(
+      meta,
+      """
+      Function call #{name}() at #{inspect(meta)} requires exactly one argument.
+      Did you mean `return #{name}` or `f []`?
+      """
+    )
+  end
+
+  def compile_apply({name, _, [arg]}) when is_atom(name) do
+    function = %Value{value: %Value.Variable{identifier: %Identifier{id: name}}}
+
+    with {:ok, arg} = compile_value(arg) do
+      {:ok,
+       %Computation{
+         computation: %Computation.Apply{
+           function: function,
+           argument: arg,
+         },
+       }}
+    end
+  end
+
+  def compile_apply({name, meta, _args}) when is_atom(name) do
+    compile_error(
+      meta,
+      """
+      #{name} called with multiple arguments.
+      Function calls can only take one argument at a time.
+      The pattern below may do the trick:
+      let #{name} <- #{name}(<first_arg>) in
+      let #{name} <- #{name}(<second_arg>) in
+      ... #{name}(<last_arg>)
+      """
     )
   end
 
@@ -335,14 +350,27 @@ defmodule MacroToAST do
     compile_error([], "Malformed value #{inspect(malformed)}")
   end
 
+  defp binding_name_to_identifier(:_), do: nil
+  defp binding_name_to_identifier(name) when is_atom(name), do: %Identifier{id: name}
+
   defp compile_error(meta, msg) do
     {:error,
      %CompileError{
        file: __ENV__.file,
-       line: Keyword.get(meta, :line, nil),
+       line: get_line(meta),
        description: msg,
      }}
   end
+
+  defp get_line(meta) do
+    Keyword.get(meta, :line, nil)
+  end
+
+  defp on_error_add_line_from({:error, %CompileError{line: nil} = error}, meta) do
+    {:error, %{error | line: get_line(meta)}}
+  end
+
+  defp on_error_add_line_from(other, _meta), do: other
 
   defp tag(item, tag) do
     {tag, item}

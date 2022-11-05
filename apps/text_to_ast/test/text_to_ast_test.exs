@@ -46,6 +46,32 @@ defmodule TextToASTTest do
     )
   }
 
+  @computation_case {
+    """
+    let me <- self in
+    let p <- spawn {
+               let msg <- receive in
+               send msg me
+             } in
+    let _ <- send () p in
+    let response <- receive in
+    return response
+    """,
+    let_in(
+      :me,
+      self_(),
+      in:
+        let_in(
+          :p,
+          spawn_(let_in(:msg, receive_(), in: send_(:msg, :me))),
+          in: [
+            send_(unit(), :p),
+            let_in(:response, receive_(), in: return(:response)),
+          ]
+        )
+    )
+  }
+
   for {source, expected} <- @computation_case do
     test source do
       assert {:ok, [result], "", _, _, _} = TextToAST.computation(unquote(source))

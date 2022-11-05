@@ -32,7 +32,10 @@ defmodule TextToAST.Helpers do
     do: %Terms.Computation.Apply{function: function, argument: argument}
 
   def to_let_in({%Terms.Identifier{} = binding, %Terms.Computation{} = bound, %Terms.Computation{} = body}),
-    do: %Terms.Computation.LetIn{binding: binding, bound: bound, body: body}
+    do: %Terms.Computation.LetIn{binding: underscore_to_nil(binding), bound: bound, body: body}
+
+  defp underscore_to_nil(%Terms.Identifier{id: :_}), do: nil
+  defp underscore_to_nil(%Terms.Identifier{} = other), do: other
 
   def to_receive("receive"), do: %Terms.Computation.Receive{}
   def to_return(%Terms.Value{} = value), do: %Terms.Computation.Return{value: value}

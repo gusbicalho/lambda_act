@@ -52,7 +52,7 @@ defmodule AST do
       end
 
       typedstruct module: LetIn, enforce: true do
-        field :binding, Identifier.t()
+        field :binding, Identifier.t() | nil
         field :bound, Computation.t()
         field :body, Computation.t()
       end

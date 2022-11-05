@@ -4,6 +4,7 @@ defmodule AST.Sugar do
   alias AST.Terms.Value
 
   def identifier(%Identifier{} = id), do: id
+  def identifier(nil), do: nil
   def identifier("" <> s), do: identifier(String.to_atom(s))
   def identifier(id) when is_atom(id), do: %Identifier{id: id}
 
@@ -33,6 +34,8 @@ defmodule AST.Sugar do
   def value(var), do: variable(var)
 
   def apply(%Computation.Apply{} = apply), do: computation(apply)
+  def apply({function, argument}), do: apply(%Computation.Apply{function: value(function), argument: value(argument)})
+  def apply(function, argument), do: apply({function, argument})
 
   def let_in(%Computation.LetIn{} = let_in), do: computation(let_in)
 
@@ -62,7 +65,7 @@ defmodule AST.Sugar do
   def spawn_(body), do: spawn_(%Computation.Spawn{body: computation(body)})
 
   def seq(first, second) do
-    let_in(:_, first, in: second)
+    let_in(nil, first, in: second)
   end
 
   def computation(%Computation{} = comp), do: comp

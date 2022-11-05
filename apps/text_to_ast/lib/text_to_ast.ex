@@ -19,7 +19,7 @@ defmodule TextToAST.Helpers do
   end
 
   def to_lambda({%Terms.Identifier{} = arg_name, %Terms.Computation{} = body}) do
-    %Terms.Value.Lambda{arg_name: arg_name, body: body}
+    %Terms.Value.Lambda{arg_name: underscore_to_nil(arg_name), body: body}
   end
 
   def to_unit(_), do: %Terms.Value.Unit{}

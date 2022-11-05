@@ -33,9 +33,9 @@ defmodule AST.Sugar do
   def value([]), do: unit()
   def value(var), do: variable(var)
 
-  def apply(%Computation.Apply{} = apply), do: computation(apply)
-  def apply({function, argument}), do: apply(%Computation.Apply{function: value(function), argument: value(argument)})
-  def apply(function, argument), do: apply({function, argument})
+  def apply_(%Computation.Apply{} = apply), do: computation(apply)
+  def apply_({function, argument}), do: apply_(%Computation.Apply{function: value(function), argument: value(argument)})
+  def apply_(function, argument), do: apply_({function, argument})
 
   def let_in(%Computation.LetIn{} = let_in), do: computation(let_in)
 

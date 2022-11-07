@@ -1,8 +1,6 @@
 defmodule TextToASTTest do
   use ExUnit.Case
 
-  import AST.Sugar
-
   doctest TextToAST
 
   Module.register_attribute(__MODULE__, :computation_case, accumulate: true)

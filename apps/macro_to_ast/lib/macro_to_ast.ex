@@ -1,6 +1,6 @@
 defmodule MacroToAST do
-  defmacro computation(do: steps) do
-    case MacroToAST.Impl.compile_computation_block(steps) do
+  defmacro computation(form) do
+    case parse(form) do
       {:ok, body} -> Macro.escape(body)
       {:error, error} -> raise error
     end
@@ -13,6 +13,9 @@ defmodule MacroToAST do
   defmacro return(_value) do
     raise "`return` outside of computation macro"
   end
+
+  def parse(do: block), do: MacroToAST.Impl.parse_computation_block(block)
+  def parse({_, _, _} = block), do: MacroToAST.Impl.parse_computation_block(block)
 end
 
 defmodule MacroToAST.Impl do
@@ -28,54 +31,54 @@ defmodule MacroToAST.Impl do
   alias __MODULE__.Value
   alias __MODULE__.Helpers
 
-  def compile_computation_block({:__block__, meta, steps}) do
-    compile_steps(steps)
+  def parse_computation_block({:__block__, meta, steps}) do
+    parse_steps(steps)
     |> Helpers.on_error_add_line_from(meta)
   end
 
-  def compile_computation_block({_, _, _} = step), do: compile_computation(step)
+  def parse_computation_block({_, _, _} = step), do: parse_computation(step)
 
-  def compile_steps([]) do
+  def parse_steps([]) do
     {:error, "empty block"}
   end
 
-  def compile_steps([last_step]) do
-    compile_computation(last_step)
+  def parse_steps([last_step]) do
+    parse_computation(last_step)
   end
 
-  def compile_steps([step | more_steps]) do
-    with {:ok, step} <- compile_computation(step),
-         {:ok, more_steps} <- compile_steps(more_steps) do
+  def parse_steps([step | more_steps]) do
+    with {:ok, step} <- parse_computation(step),
+         {:ok, more_steps} <- parse_steps(more_steps) do
       {:ok, Let.sequence(step, more_steps)}
     end
   end
 
-  def compile_computation({tag, meta, _} = form) do
+  def parse_computation({tag, meta, _} = form) do
     case tag do
-      :let -> Let.compile(form)
-      :self -> Self.compile(form)
-      :spawn -> Spawn.compile(form)
-      :send -> Send.compile(form)
-      :return -> Return.compile(form)
-      :receive -> Receive.compile(form)
-      {:., _, _} -> Apply.compile(form)
-      name when is_atom(name) and name not in [:fn] -> Apply.compile(form)
+      :let -> Let.parse(form)
+      :self -> Self.parse(form)
+      :spawn -> Spawn.parse(form)
+      :send -> Send.parse(form)
+      :return -> Return.parse(form)
+      :receive -> Receive.parse(form)
+      {:., _, _} -> Apply.parse(form)
+      name when is_atom(name) and name not in [:fn] -> Apply.parse(form)
       _other -> test_compiling_unexpected_bare_value(form)
     end
     |> Helpers.on_error_add_line_from(meta)
   end
 
-  def compile_computation(malformed) do
-    Helpers.compile_error([], "Malformed computation #{inspect(malformed)}")
+  def parse_computation(malformed) do
+    Helpers.parse_error([], "Malformed computation #{inspect(malformed)}")
   end
 
   def test_compiling_unexpected_bare_value({_, meta, _} = form) do
-    case Value.compile(form) do
+    case Value.parse(form) do
       {:ok, _value} ->
-        Helpers.compile_error(meta, "Bare value is not valid syntax. Did you mean `return <value>`?")
+        Helpers.parse_error(meta, "Bare value is not valid syntax. Did you mean `return <value>`?")
 
       _error ->
-        Helpers.compile_error(meta, "Malformed computation")
+        Helpers.parse_error(meta, "Malformed computation")
     end
   end
 
@@ -90,7 +93,7 @@ defmodule MacroToAST.Impl do
       }
     end
 
-    def compile({:let, meta, bindings_and_do}) do
+    def parse({:let, meta, bindings_and_do}) do
       {bindings, do_block} =
         Enum.split_while(bindings_and_do, fn
           {:<-, _, _} -> true
@@ -99,14 +102,14 @@ defmodule MacroToAST.Impl do
         end)
 
       case do_block do
-        [[do: do_block]] -> compile(bindings, do_block)
-        malformed -> Helpers.compile_error(meta, "Expected do block, instead got #{inspect(malformed)}")
+        [[do: do_block]] -> parse(bindings, do_block)
+        malformed -> Helpers.parse_error(meta, "Expected do block, instead got #{inspect(malformed)}")
       end
     end
 
-    def compile(bindings, do_block) do
-      with {:ok, bindings} <- Helpers.map_ok(bindings, &compile_binding/1),
-           {:ok, final_comp} <- Impl.compile_computation_block(do_block) do
+    def parse(bindings, do_block) do
+      with {:ok, bindings} <- Helpers.map_ok(bindings, &parse_binding/1),
+           {:ok, final_comp} <- Impl.parse_computation_block(do_block) do
         bindings
         |> Enum.reverse()
         |> Enum.reduce(final_comp, fn {binding, bound}, acc ->
@@ -122,38 +125,38 @@ defmodule MacroToAST.Impl do
       end
     end
 
-    defp compile_binding({:<-, _, [{name, _, nil}, bound]}) do
-      with {:ok, bound} <- Impl.compile_computation_block(bound) do
+    defp parse_binding({:<-, _, [{name, _, nil}, bound]}) do
+      with {:ok, bound} <- Impl.parse_computation_block(bound) do
         {:ok, {Helpers.binding_name_to_identifier(name), bound}}
       end
     end
 
-    defp compile_binding({:=, _, [{name, _, nil}, bound]}) do
-      with {:ok, bound} <- Value.compile(bound) do
+    defp parse_binding({:=, _, [{name, _, nil}, bound]}) do
+      with {:ok, bound} <- Value.parse(bound) do
         {:ok, {Helpers.binding_name_to_identifier(name), %Computation{computation: %Computation.Return{value: bound}}}}
       end
     end
 
-    defp compile_binding(malformed) do
-      Helpers.compile_error([], "Malformed binding: #{inspect(malformed)}")
+    defp parse_binding(malformed) do
+      Helpers.parse_error([], "Malformed binding: #{inspect(malformed)}")
     end
   end
 
   defmodule Self do
-    def compile({:self, _, nil}) do
+    def parse({:self, _, nil}) do
       {:ok, %Computation{computation: %Computation.Self{}}}
     end
 
-    def compile({:self, meta, _child}) do
-      Helpers.compile_error(meta, """
+    def parse({:self, meta, _child}) do
+      Helpers.parse_error(meta, """
       `self` does not expect arguments.
       """)
     end
   end
 
   defmodule Spawn do
-    def compile({:spawn, meta, []}) do
-      Helpers.compile_error(
+    def parse({:spawn, meta, []}) do
+      Helpers.parse_error(
         meta,
         """
         spawn requires a computation body
@@ -161,23 +164,23 @@ defmodule MacroToAST.Impl do
       )
     end
 
-    def compile({:spawn, _, [[{:do, block}]]}) do
-      with {:ok, block} <- Impl.compile_computation_block(block) do
+    def parse({:spawn, _, [[{:do, block}]]}) do
+      with {:ok, block} <- Impl.parse_computation_block(block) do
         {:ok, %Computation{computation: %Computation.Spawn{body: block}}}
       end
     end
 
-    def compile({:spawn, _, args}) do
-      with {:ok, block} <- Impl.compile_steps(args) do
+    def parse({:spawn, _, args}) do
+      with {:ok, block} <- Impl.parse_steps(args) do
         {:ok, %Computation{computation: %Computation.Spawn{body: block}}}
       end
     end
   end
 
   defmodule Send do
-    def compile({:send, _, [msg, actor]}) do
-      with {:ok, msg} <- Value.compile(msg),
-           {:ok, actor} <- Value.compile(actor) do
+    def parse({:send, _, [msg, actor]}) do
+      with {:ok, msg} <- Value.parse(msg),
+           {:ok, actor} <- Value.parse(actor) do
         {:ok,
          %Computation{
            computation: %Computation.Send{
@@ -188,8 +191,8 @@ defmodule MacroToAST.Impl do
       end
     end
 
-    def compile({:send, meta, args}) do
-      Helpers.compile_error(
+    def parse({:send, meta, args}) do
+      Helpers.parse_error(
         meta,
         "`send` expects two arguments, but at got #{inspect(args)}"
       )
@@ -197,8 +200,8 @@ defmodule MacroToAST.Impl do
   end
 
   defmodule Return do
-    def compile({:return, _, [value]}) do
-      with {:ok, value} <- Value.compile(value) do
+    def parse({:return, _, [value]}) do
+      with {:ok, value} <- Value.parse(value) do
         {:ok,
          %Computation{
            computation: %Computation.Return{value: value},
@@ -206,26 +209,26 @@ defmodule MacroToAST.Impl do
       end
     end
 
-    def compile({:return, meta, []}) do
-      Helpers.compile_error(meta, """
+    def parse({:return, meta, []}) do
+      Helpers.parse_error(meta, """
       `return` expects a value.
       """)
     end
 
-    def compile({:return, meta, _args}) do
-      Helpers.compile_error(meta, """
+    def parse({:return, meta, _args}) do
+      Helpers.parse_error(meta, """
       `return` expects exactly one value.
       """)
     end
   end
 
   defmodule Receive do
-    def compile({:receive, _, nil}) do
+    def parse({:receive, _, nil}) do
       {:ok, %Computation{computation: %Computation.Receive{}}}
     end
 
-    def compile({:receive, meta, args}) do
-      Helpers.compile_error(
+    def parse({:receive, meta, args}) do
+      Helpers.parse_error(
         meta,
         "`receive` expects no arguments, but at got #{inspect(args)}"
       )
@@ -233,8 +236,8 @@ defmodule MacroToAST.Impl do
   end
 
   defmodule Apply do
-    def compile({{:., _, [_callee]}, meta, []}) do
-      Helpers.compile_error(
+    def parse({{:., _, [_callee]}, meta, []}) do
+      Helpers.parse_error(
         meta,
         """
         Function call requires exactly one argument.
@@ -243,9 +246,9 @@ defmodule MacroToAST.Impl do
       )
     end
 
-    def compile({{:., _, [function]}, _, [arg]}) do
-      with {:ok, function} <- Value.compile(function),
-           {:ok, arg} <- Value.compile(arg) do
+    def parse({{:., _, [function]}, _, [arg]}) do
+      with {:ok, function} <- Value.parse(function),
+           {:ok, arg} <- Value.parse(arg) do
         {:ok,
          %Computation{
            computation: %Computation.Apply{
@@ -256,8 +259,8 @@ defmodule MacroToAST.Impl do
       end
     end
 
-    def compile({{:., _, [_callee]}, meta, _args}) do
-      Helpers.compile_error(
+    def parse({{:., _, [_callee]}, meta, _args}) do
+      Helpers.parse_error(
         meta,
         """
         Value called with multiple arguments.
@@ -270,8 +273,8 @@ defmodule MacroToAST.Impl do
       )
     end
 
-    def compile({name, meta, nil}) when is_atom(name) do
-      Helpers.compile_error(
+    def parse({name, meta, nil}) when is_atom(name) do
+      Helpers.parse_error(
         meta,
         """
         Bare name #{name} is not valid syntax.
@@ -280,8 +283,8 @@ defmodule MacroToAST.Impl do
       )
     end
 
-    def compile({name, meta, []}) when is_atom(name) do
-      Helpers.compile_error(
+    def parse({name, meta, []}) when is_atom(name) do
+      Helpers.parse_error(
         meta,
         """
         Function call #{name}() at #{inspect(meta)} requires exactly one argument.
@@ -290,9 +293,9 @@ defmodule MacroToAST.Impl do
       )
     end
 
-    def compile({name, _, [arg]}) when is_atom(name) do
+    def parse({name, _, [arg]}) when is_atom(name) do
       with {:ok, function} <- Value.variable(name),
-           {:ok, arg} <- Value.compile(arg) do
+           {:ok, arg} <- Value.parse(arg) do
         {:ok,
          %Computation{
            computation: %Computation.Apply{
@@ -303,8 +306,8 @@ defmodule MacroToAST.Impl do
       end
     end
 
-    def compile({name, meta, _args}) when is_atom(name) do
-      Helpers.compile_error(
+    def parse({name, meta, _args}) when is_atom(name) do
+      Helpers.parse_error(
         meta,
         """
         #{name} called with multiple arguments.
@@ -324,7 +327,7 @@ defmodule MacroToAST.Impl do
     def variable(name) when is_atom(name) do
       case Helpers.binding_name_to_identifier(name) do
         nil ->
-          Helpers.compile_error([], """
+          Helpers.parse_error([], """
           The name #{name} represents a discarded binding or argument.
           It cannot be referenced.
           """)
@@ -334,16 +337,16 @@ defmodule MacroToAST.Impl do
       end
     end
 
-    def compile([]) do
+    def parse([]) do
       {:ok, %Value{value: %Value.Unit{}}}
     end
 
-    def compile({name, _, nil}) when is_atom(name) do
+    def parse({name, _, nil}) when is_atom(name) do
       variable(name)
     end
 
-    def compile({:fn, _, [{:->, meta, [[], _]}]}) do
-      Helpers.compile_error(
+    def parse({:fn, _, [{:->, meta, [[], _]}]}) do
+      Helpers.parse_error(
         meta,
         """
         Lambdas must have at least one argument.
@@ -351,7 +354,7 @@ defmodule MacroToAST.Impl do
       )
     end
 
-    def compile({:fn, _, [{:->, _, [args, body]}]}) do
+    def parse({:fn, _, [{:->, _, [args, body]}]}) do
       with {:ok, args} <-
              Helpers.map_ok(args, fn
                {name, _, nil} ->
@@ -363,7 +366,7 @@ defmodule MacroToAST.Impl do
                   Malformed parameter #{inspect(other)}
                   """}
              end),
-           {:ok, body} <- Impl.compile_computation_block(body) do
+           {:ok, body} <- Impl.parse_computation_block(body) do
         [first_arg | more_args] = args
 
         more_args
@@ -382,10 +385,10 @@ defmodule MacroToAST.Impl do
       end
     end
 
-    def compile(malformed) do
+    def parse(malformed) do
       IO.inspect(malformed, label: "malformed value")
       # TODO
-      Helpers.compile_error([], "Malformed value #{inspect(malformed)}")
+      Helpers.parse_error([], "Malformed value #{inspect(malformed)}")
     end
   end
 
@@ -395,7 +398,7 @@ defmodule MacroToAST.Impl do
     def binding_name_to_identifier(:_), do: nil
     def binding_name_to_identifier(name) when is_atom(name), do: %Identifier{id: name}
 
-    def compile_error(meta, msg) do
+    def parse_error(meta, msg) do
       {:error,
        %CompileError{
          file: __ENV__.file,

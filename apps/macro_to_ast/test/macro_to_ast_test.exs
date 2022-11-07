@@ -2,7 +2,6 @@ defmodule MacroToASTTest do
   use ExUnit.Case
 
   import MacroToAST
-  alias AST.Sugar, as: S
 
   doctest MacroToAST
 
